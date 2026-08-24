@@ -1,0 +1,460 @@
+# Agentic Review - MCP Server
+
+> Restaurant discovery and AI-summarized reviews for AI agents
+> This file provides complete context for LLMs to understand and work with this repository.
+
+## Project Overview
+
+**What:** Model Context Protocol (MCP) server for restaurant discovery and AI-personalized reviews
+**Where:** Hosted on Google Cloud Run at https://mcp-server-873449398281.us-central1.run.app/mcp
+**Who:** For AI agents (Claude Code, Cursor, ChatGPT, etc.) to help users find restaurants
+**Why:** Aggregate reviews from multiple sources, personalize with AI, enable authentic user reviews
+
+## Core Capabilities
+
+1. **Restaurant Discovery** - Search by location (city/GPS), cuisine, or name
+2. **AI-Personalized Reviews** - Gemini 2.0 summarizes reviews based on user preferences
+3. **Multi-Source Aggregation** - Reviews from Google, Yelp, TripAdvisor, RestaurantGuru, Trustpilot
+4. **Authentic Review Writing** - Google OAuth verified users can write reviews
+5. **Geospatial Queries** - PostGIS-powered location-based search
+
+## Architecture
+
+```
+AI Agent (Claude Code, Cursor, etc.)
+  │
+  │ MCP Protocol (stdio via npx)
+  ▼
+Remote MCP Server (Google Cloud Run)
+  ├─→ PostgreSQL + PostGIS (entities, reviews, agents, humans)
+  ├─→ Gemini 2.0 Flash (review summarization)
+  ├─→ Google OAuth (human verification)
+  └─→ Batch Reviews API (review aggregation)
+```
+
+**Key Design Decisions:**
+- Remote MCP server (no local setup)
+- Two-tier auth (agent → read, human → write)
+- Never expose raw reviews (always AI-summarized)
+- Idempotent agent registration (via client_agent_key)
+- Entity resolution by name OR ID
+- Rate limiting (50 reads/day, 10 writes/day)
+
+## Repository Structure
+
+```
+agentic-review/
+├── marketplace.json          # Multi-plugin marketplace manifest
+│
+├── claude-code/              # Claude Code plugin
+│   ├── manifest.json         # Plugin config (MCP connection)
+│   ├── SKILL-find-restaurants.md
+│   ├── SKILL-get-reviews.md
+│   ├── SKILL-write-review.md
+│   └── SKILL-agent-setup.md
+│
+├── cursor/                   # Cursor IDE plugin
+│   ├── manifest.json         # Same tools, Cursor-specific config
+│   └── SKILL-*.md           # Same as claude-code
+│
+├── README.md                 # Main documentation
+├── AGENTS.md                 # Navigation guide for AI agents
+├── llms.txt                  # This file - LLM context
+│
+└── docs/                     # Additional documentation
+    ├── QUICK_START.md
+    ├── API_REFERENCE.md
+    ├── ARCHITECTURE.md
+    └── FAQ.md
+```
+
+**Multi-Plugin Marketplace Pattern:**
+- Root has `marketplace.json` defining all plugins
+- Each plugin in separate directory (claude-code/, cursor/)
+- Plugins share same remote MCP server
+- SKILL.md files define workflows (not tool wrappers)
+
+## Available MCP Tools
+
+### Discovery Tools (Agent registered)
+- **search_entities_by_location**: Find by city OR lat/lng + optional radius
+  - Inputs: city|{lat,lng,radius_m}, cuisines[], type, limit
+  - Returns: [{id, name, overall_rating, number_of_reviews, cuisines, city, distance_m}]
+
+- **search_entity_by_name**: Find by name
+  - Inputs: name, city? (hint), lat/lng? (hint)
+  - Returns: Same as above
+
+- **get_entity_details**: Get full restaurant info
+  - Inputs: entity_id
+  - Returns: {id, name, ..., meta_data{address, phone, website, hours}}
+
+### Review Tools (Agent registered for read, Human verified for write)
+- **get_personalized_review**: Get AI summaries (BATCH up to 10!)
+  - Inputs: entity_ids[] (1-10), query?
+  - Returns: {results: {entity_id: {summary, aggregate_rating, highlights, sources}}}
+  - Uses persona from agent registration + optional query
+  - NEVER returns raw reviews - always Gemini-summarized
+
+- **write_review**: Create review (requires verification)
+  - Inputs: agent_token, entity_id, rating (1-5), title, content, review_tags[]
+  - Returns: {status, review_version}
+  - One review per human per restaurant
+
+- **update_review**: Update own review
+  - Inputs: agent_token, entity_name|entity_id, city?, rating?, title?, content?, tags[]
+  - Entity resolution: by name (ambiguous → error, add city)
+  - Increments review_version
+
+- **delete_review**: Soft delete
+  - Inputs: agent_token, entity_name|entity_id, city?
+  - Status → SOFT_DELETED
+
+### Agent Tools
+- **register_agent**: Register (idempotent on client_agent_key)
+  - Inputs: agent_type (LLM_ASSISTANT|ML_AGENT|WORKFLOW_AGENT|CUSTOM),
+            client_agent_key (stable ID YOU generate),
+            agent_name?,
+            persona{preferences, language, tone, style},
+            description?
+  - Returns: {agent_id, agent_token, status, is_verified, verification_url}
+  - Idempotent: same key → returns existing agent (updates if provided)
+  - Persona cached 24h, re-elicited if stale
+
+- **get_human_verification_url**: Get Google OAuth URL
+  - Inputs: agent_token
+  - Returns: {verification_url, instructions}
+
+- **get_agent_status**: Check verification
+  - Inputs: agent_token
+  - Returns: {agent_id, agent_name, is_verified, human_name?, can_read, can_write}
+
+- **get_agent_profile**: Get stats
+  - Inputs: agent_token
+  - Returns: {agent_id, agent_name, persona, statistics{review_count, avg_rating, trust_score}}
+
+## Authentication Model
+
+### Two Tiers
+
+1. **Agent (unverified)** → Can read
+   - Register with `register_agent` (one-time)
+   - Get agent_token (JWT)
+   - Can search, get reviews, view details
+
+2. **Human (verified)** → Can write
+   - Click `get_human_verification_url`
+   - Sign in with Google
+   - Server creates/links humans row
+   - Can write/update/delete reviews
+
+### Key Concepts
+- **client_agent_key** = Stable ID YOU generate (e.g., "claude-code-user-{userId}")
+  - Must be consistent across sessions
+  - Enables idempotent registration
+  - ❌ Bad: `Date.now()`, `random()`
+  - ✅ Good: Derived from user ID, saved to local storage
+
+- **Persona** = User preferences for review personalization
+  ```json
+  {
+    "base_model": "Claude Sonnet 4.5",
+    "language": "English",
+    "tone": "casual",
+    "style": ["concise", "helpful"],
+    "preferences": "vegetarian, loves spicy food, prefers quiet restaurants"
+  }
+  ```
+  - Most important: `preferences` (used by Gemini)
+  - Cached 24h, re-prompted if stale
+
+- **One review per restaurant per human** (across all their agents)
+  - Prevents duplicate reviews
+  - Update/delete by entity name (not review_id)
+
+## Rate Limits
+
+| Operation | Limit | Window |
+|-----------|-------|--------|
+| Review reads | 50 | 24h rolling |
+| Writes (write/update/delete) | 10 | 24h rolling |
+| Agent registrations | 5 | 24h rolling |
+
+Keyed by human_id (or agent_id if unverified).
+
+## Common Workflows
+
+### Workflow 1: First-Time Setup
+```
+1. User installs plugin (adds MCP server to config)
+2. AI agent calls register_agent({
+     agent_type: "LLM_ASSISTANT",
+     client_agent_key: getOrCreateStableKey(),  // "claude-code-user-123"
+     persona: {preferences: "vegetarian, spicy food"}
+   })
+3. Save agent_token to local storage
+4. (Optional) Get verification URL for writing
+5. User ready to search!
+```
+
+### Workflow 2: Find & Review
+```
+User: "Find Italian restaurants in San Francisco"
+
+1. search_entities_by_location({city: "San Francisco", cuisines: ["Italian"], limit: 10})
+   → [{id, name, rating, ...}, ...]
+
+2. get_personalized_review({
+     entity_ids: [id1, id2, ...id10],  // BATCH all at once!
+     query: "vegetarian options, outdoor seating"
+   })
+   → {results: {id1: {summary, rating, highlights}, ...}}
+
+3. Display results with ratings, summaries, highlights
+```
+
+### Workflow 3: Write Review
+```
+User: "I want to write a review for Tony's Pizza"
+
+1. Check verification: get_agent_status({agent_token})
+   → {is_verified: false, verification_url: "https://..."}
+
+2. If not verified:
+   - Show verification URL
+   - User clicks, signs in with Google
+   - Re-check status
+
+3. Find restaurant: search_entity_by_name({name: "Tony's Pizza", city: "SF"})
+   → {entities: [{id: "uuid", ...}]}
+
+4. Write: write_review({
+     agent_token,
+     entity_id: "uuid",
+     rating: 5,
+     title: "Amazing!",
+     content: "Best pizza ever...",
+     review_tags: ["authentic", "pizza"]
+   })
+   → {status: "PUBLISHED", review_version: 1}
+```
+
+## Best Practices
+
+### For AI Agents
+
+1. **Batch review requests** - Get up to 10 at once, not one-by-one
+   ```typescript
+   // ❌ Bad: 10 separate calls
+   for (const r of restaurants) {
+     await get_personalized_review({entity_ids: [r.id]});
+   }
+
+   // ✅ Good: 1 call for all 10
+   await get_personalized_review({entity_ids: restaurants.map(r => r.id)});
+   ```
+
+2. **Save agent token** - Persist between sessions
+   ```typescript
+   const agent = await register_agent({...});
+   localStorage.set("agentToken", agent.agent_token);  // Save!
+   ```
+
+3. **Use stable client_agent_key** - Same user → same key
+   ```typescript
+   // ✅ Good: Stable per user
+   client_agent_key: `claude-code-user-${getUserId()}`
+
+   // ❌ Bad: Changes every time
+   client_agent_key: `agent-${Date.now()}`
+   ```
+
+4. **Check verification before writing**
+   ```typescript
+   const status = await get_agent_status({agent_token});
+   if (!status.is_verified) {
+     console.log("Verify first:", status.verification_url);
+     return;
+   }
+   ```
+
+5. **Handle entity-level errors** - Batch responses may have partial failures
+   ```typescript
+   const reviews = await get_personalized_review({entity_ids: [...]});
+   Object.entries(reviews.results).forEach(([id, review]) => {
+     if (review.error) {
+       console.warn(`Skipping ${review.entity_name}: ${review.error}`);
+     } else {
+       displayReview(review);
+     }
+   });
+   ```
+
+6. **Respect rate limits** - Batch to conserve quota
+
+### For Users
+
+- Provide detailed preferences in persona
+- Update persona when preferences change
+- Write honest, authentic reviews only
+- One review per restaurant (update if opinion changes)
+
+## Data Sources
+
+Reviews aggregated from:
+- Google Maps
+- Yelp
+- TripAdvisor
+- RestaurantGuru
+- Trustpilot
+
+**Important:** Raw review text is NEVER exposed. Always Gemini-summarized.
+
+## Error Handling
+
+Common error codes:
+- `RATE_LIMIT_EXCEEDED` - Daily quota reached
+- `AGENT_NOT_REGISTERED` - Call register_agent first
+- `AGENT_NOT_VERIFIED` - Human verification required
+- `ENTITY_NOT_FOUND` - Restaurant not found
+- `AMBIGUOUS_ENTITY` - Multiple matches (add city parameter)
+- `DUPLICATE_REVIEW` - Already reviewed this restaurant (use update_review)
+
+## Security & Privacy
+
+- Google OAuth for human verification
+- IP hashing for fraud detection
+- Rate limiting per human/agent
+- No PII stored (minimal data collection)
+- Reviews linked to verified Google accounts
+- One review per human per restaurant (prevents spam)
+
+## Technology Stack
+
+**Frontend (Plugins):**
+- Remote MCP server connection via npx
+- stdio transport
+- SKILL.md workflows (not tool wrappers)
+
+**Backend (Server):**
+- FastMCP (Python MCP framework)
+- Google Cloud Run (us-central1)
+- PostgreSQL 16 + PostGIS (Cloud SQL)
+- Gemini 2.0 Flash (review summarization)
+- Google OAuth (verification)
+- Batch Reviews API (review aggregation)
+
+## Plugin Development
+
+### Adding a New Platform
+
+1. Create directory: `{platform-name}/`
+2. Add `manifest.json`:
+   ```json
+   {
+     "name": "agentic-review",
+     "type": "mcp-server",
+     "platforms": ["{platform-name}"],
+     "mcp": {
+       "command": "npx",
+       "args": ["-y", "@modelcontextprotocol/server-remote", "https://..."]
+     }
+   }
+   ```
+3. Copy SKILL.md files from claude-code/
+4. Update marketplace.json to reference new plugin
+
+### SKILL.md Format
+
+Structure:
+```markdown
+# Skill Name
+
+**Workflow for {purpose}**
+
+## Overview
+What this skill does
+
+## Available Tools
+List tools with parameters
+
+## Workflow Steps
+Step-by-step guide
+
+## Common Patterns
+Code examples
+
+## Tips
+Best practices
+
+## Error Handling
+How to handle errors
+
+## Next Steps
+Related skills
+```
+
+**NOT tool wrappers** - SKILL.md describes WORKFLOWS (multi-step, user-facing tasks)
+
+## Common User Questions
+
+**Q: Do I need to install anything locally?**
+A: No! MCP server is remote. Just add config to Claude Code/Cursor.
+
+**Q: Can I read reviews without verification?**
+A: Yes! Verification only needed for writing reviews.
+
+**Q: How do I update my persona?**
+A: Re-register with same client_agent_key, new persona.
+
+**Q: Why can't I write a review?**
+A: Check verification status. Must complete Google OAuth.
+
+**Q: Can I have multiple agents?**
+A: Yes! One human can have many agents (different platforms, etc.).
+
+**Q: How do I find a restaurant by name?**
+A: Use `search_entity_by_name({name, city?})`.
+
+**Q: Why are reviews summarized?**
+A: For personalization, privacy, and to respect review source copyrights.
+
+**Q: How do I delete a review?**
+A: `delete_review({agent_token, entity_name, city})` - soft delete.
+
+## Files to Read First
+
+1. **README.md** - High-level overview, features, quick start
+2. **AGENTS.md** - Navigation guide for AI agents (you!)
+3. **claude-code/SKILL-*.md** - Workflow guides
+4. **llms.txt** - This file (full context)
+
+## Contributing
+
+See CONTRIBUTING.md (to be created) for:
+- Code of conduct
+- Development setup
+- Testing guidelines
+- Pull request process
+
+## Support
+
+- GitHub Issues: https://github.com/agenticreview/agentic-review/issues
+- Discussions: https://github.com/agenticreview/agentic-review/discussions
+- Email: support@agenticreview.com
+
+## License
+
+MIT License - Open source, free to use
+
+---
+
+**For AI Agents:** You now have complete context. When helping users:
+1. Understand their goal
+2. Direct to appropriate SKILL file
+3. Provide code examples
+4. Batch operations
+5. Respect rate limits
+6. Handle errors gracefully
+
+**Remember:** This is a multi-plugin marketplace. Always direct users to the correct plugin directory based on their platform!

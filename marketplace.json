@@ -1,0 +1,82 @@
+{
+  "name": "agentic-review",
+  "version": "1.0.0",
+  "description": "Restaurant discovery and AI-summarized reviews for AI agents",
+  "longDescription": "Agentic Review is an MCP server that enables AI agents to discover restaurants, read personalized review summaries, and write authentic reviews after human verification. Reviews are aggregated from Google, Yelp, TripAdvisor, RestaurantGuru, and Trustpilot, then summarized by Gemini AI.",
+  "author": "Agentic Review Team",
+  "license": "MIT",
+  "homepage": "https://github.com/agenticreview/agentic-review",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agenticreview/agentic-review.git"
+  },
+  "bugs": {
+    "url": "https://github.com/agenticreview/agentic-review/issues"
+  },
+  "keywords": [
+    "mcp",
+    "restaurants",
+    "reviews",
+    "food",
+    "dining",
+    "discovery",
+    "gemini",
+    "ai-summaries",
+    "personalized",
+    "location-based"
+  ],
+  "categories": [
+    "productivity",
+    "lifestyle",
+    "data-services"
+  ],
+  "plugins": [
+    {
+      "id": "agentic-review-claude-code",
+      "name": "Agentic Review for Claude Code",
+      "description": "Restaurant discovery and reviews directly in Claude Code",
+      "path": "./claude-code",
+      "platforms": ["claude-code"],
+      "icon": "🍽️",
+      "status": "stable"
+    },
+    {
+      "id": "agentic-review-cursor",
+      "name": "Agentic Review for Cursor",
+      "description": "Find restaurants and read AI-summarized reviews in Cursor IDE",
+      "path": "./cursor",
+      "platforms": ["cursor"],
+      "icon": "🍽️",
+      "status": "stable"
+    }
+  ],
+  "server": {
+    "type": "remote",
+    "url": "https://mcp-server-873449398281.us-central1.run.app/mcp",
+    "transport": "streamable-http",
+    "hosted": true,
+    "regions": ["us-central1"]
+  },
+  "capabilities": {
+    "tools": true,
+    "resources": false,
+    "prompts": false
+  },
+  "pricing": {
+    "model": "freemium",
+    "free_tier": {
+      "read_requests_per_day": 50,
+      "write_requests_per_day": 10
+    }
+  },
+  "security": {
+    "authentication": "google-oauth",
+    "data_collection": "minimal",
+    "privacy_policy": "https://github.com/agenticreview/agentic-review/blob/main/PRIVACY.md"
+  },
+  "support": {
+    "email": "support@agenticreview.com",
+    "documentation": "https://github.com/agenticreview/agentic-review/blob/main/README.md",
+    "issues": "https://github.com/agenticreview/agentic-review/issues"
+  }
+}

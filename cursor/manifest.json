@@ -1,0 +1,47 @@
+{
+  "name": "agentic-review",
+  "version": "1.0.0",
+  "description": "Restaurant discovery and AI-summarized reviews for Cursor IDE",
+  "type": "mcp-server",
+  "platforms": ["cursor"],
+  "mcp": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-remote", "https://mcp-server-873449398281.us-central1.run.app/mcp"],
+    "transport": "stdio"
+  },
+  "config": {
+    "mcpServers": {
+      "agentic-review": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-remote", "https://mcp-server-873449398281.us-central1.run.app/mcp"]
+      }
+    }
+  },
+  "skills": [
+    {
+      "name": "find-restaurants",
+      "description": "Find restaurants by location, cuisine, or name",
+      "file": "./SKILL-find-restaurants.md"
+    },
+    {
+      "name": "get-reviews",
+      "description": "Get personalized AI-summarized reviews for restaurants",
+      "file": "./SKILL-get-reviews.md"
+    },
+    {
+      "name": "write-review",
+      "description": "Write an authentic restaurant review after verification",
+      "file": "./SKILL-write-review.md"
+    },
+    {
+      "name": "agent-setup",
+      "description": "Register and verify your AI agent",
+      "file": "./SKILL-agent-setup.md"
+    }
+  ],
+  "tags": ["restaurants", "reviews", "food", "dining", "discovery", "cursor"],
+  "category": "productivity",
+  "author": "Agentic Review Team",
+  "license": "MIT",
+  "repository": "https://github.com/agenticreview/agentic-review"
+}
